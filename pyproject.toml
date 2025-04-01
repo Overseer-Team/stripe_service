@@ -1,0 +1,22 @@
+[project]
+name = "stripe_service"
+version = "0.1.0"
+description = "Default template for PDM package"
+authors = [
+    {name = "Void-ux", email = "77840397+Void-ux@users.noreply.github.com"},
+]
+dependencies = [
+    "litestar[standard]>=2.15.1",
+    "asyncpg>=0.30.0",
+    "stripe>=11.6.0",
+    "petname>=2.6",
+    "gunicorn>=23.0.0",
+    "discord-py>=2.5.2",
+    "colorama>=0.4.6",
+]
+requires-python = "==3.12.*"
+readme = "README.md"
+license = {text = "MIT"}
+
+[tool.pdm]
+distribution = false
