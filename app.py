@@ -135,7 +135,11 @@ async def webhook(request: Request) -> Response:
                     sub = event.data.object
                     await conn.execute('DELETE FROM patrons WHERE customer_id=$1', sub['customer'])
 
+                case _:
+                    log.debug('Unhandled event type %s', event.type)
+
         return Response('Success', status_code=200)
+
 
 @post("/checkout")
 async def checkout(request: Request) -> Response:
