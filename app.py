@@ -126,6 +126,11 @@ async def webhook(request: Request) -> Response:
                     if not sub['items']['data']:
                         return Response('No items', status_code=200)
                     price_id = sub['items']['data'][0]['price']['id']
+                    if sub['status'] == 'canceled':
+                        user_id = await request.app.state.pool.fetchval(
+                            'DELETE FROM patrons WHERE customer_id=$1 RETURNING user_id', sub['customer']
+                        )
+                        log.info(f'{Fore.RED}Subscription for user %s expired{Fore.RESET}', user_id)
                     tier = rev_prices.get(price_id)
                     if tier:
                         log.info(f'{Fore.GREEN}Payment complete for customer {sub['customer']}{Fore.RESET}')
