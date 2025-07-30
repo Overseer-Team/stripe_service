@@ -1,9 +1,9 @@
 import json
 import logging
+import secrets
 import sys
 
 import stripe
-import petname
 import asyncpg
 from litestar import Litestar, Request, Response, get, post
 from litestar.response import Redirect
@@ -79,37 +79,63 @@ async def webhook(request: Request) -> Response:
     payload = await request.body()
     sig_header = request.headers.get("stripe-signature")
     try:
-        event = stripe.Webhook.construct_event(payload, sig_header, config.stripe_secret)
+        event = stripe.Webhook.construct_event(payload, sig_header, config.signing_secret)
         log.debug(f"Processed webhook event: {event.type}")
+        log.debug(str(event))
     except ValueError:
         return Response("Invalid payload", status_code=400)
     except stripe.SignatureVerificationError:
         return Response("Invalid signature", status_code=400)
 
-    if event.type == "checkout.session.completed":
-        log.debug(f"Checkout session completed: {event.data.object['id']}")
-        session = event["data"]["object"]
-        session_id = session.get("client_reference_id")
-        if session_id is None:
-            log.debug('No client_reference_id; skipping')
-            return Response('client_reference_id not set', status_code=200)
+    rev_prices = {v: k for k, v in config.stripe_prices.items()}
 
-        data = await request.app.state.pool.fetchrow(
-            'SELECT user_id, guild_id, stripe_price FROM stripe_states WHERE state=$1', session_id
-        )
-        if data is None:
-            log.error('Unable to find a matching session ID in store for %s', session_id)
-            return Response('Success', status_code=200)
+    async with request.app.state.pool.acquire() as conn:
+        async with conn.transaction():
+            match event.type:
+                case 'checkout.session.completed':
+                    sess = event.data.object
+                    if sess.get('payment_status') != 'paid':
+                        return Response('Unpaid session', status_code=200)
 
-        user_id, guild_id = data['user_id'], data['guild_id']
-        await request.app.state.pool.execute(
-            'INSERT INTO patrons (user_id, guild_id, tier, subscribed_at) VALUES ($1, $2, $3, now()) ON CONFLICT (user_id, guild_id) DO NOTHING',
-            user_id, guild_id, {v: k for k, v in config.stripe_prices.items()}[data['stripe_price']]
-        )
-        log.info(f'{Fore.GREEN}Payment complete for Discord user {user_id}{Fore.RESET}')
+                    ref = sess.get('client_reference_id')
+                    if not ref:
+                        return Response('Missing state', status_code=200)
 
-    return Response('Success', status_code=200)
+                    state = await conn.fetchrow(
+                        'SELECT user_id, guild_id, stripe_price FROM stripe_states WHERE state=$1',
+                        ref,
+                    )
+                    if not state:
+                        return Response('Orphan state', status_code=200)
 
+                    tier = rev_prices.get(state['stripe_price'])
+                    if not tier:
+                        return Response('Unknown price', status_code=200)
+
+                    log.info(f'{Fore.GREEN}Payment complete for Discord user {state['user_id']}{Fore.RESET}')
+                    await conn.execute(
+                        """INSERT INTO patrons (user_id, guild_id, customer_id, tier, subscribed_at)
+                           VALUES($1, $2, $3, $4, now())
+                           ON CONFLICT (user_id, guild_id)
+                           DO UPDATE SET customer_id=EXCLUDED.customer_id, tier=EXCLUDED.tier
+                        """, state['user_id'], state['guild_id'], sess['customer'], tier
+                    )
+
+                case 'customer.subscription.updated' | 'customer.subscription.created':
+                    sub = event.data.object
+                    if not sub['items']['data']:
+                        return Response('No items', status_code=200)
+                    price_id = sub['items']['data'][0]['price']['id']
+                    tier = rev_prices.get(price_id)
+                    if tier:
+                        log.info(f'{Fore.GREEN}Payment complete for customer {sub['customer']}{Fore.RESET}')
+                        await conn.execute('UPDATE patrons SET tier=$1 WHERE customer_id=$2', tier, sub['customer'])
+
+                case 'customer.subscription.deleted':
+                    sub = event.data.object
+                    await conn.execute('DELETE FROM patrons WHERE customer_id=$1', sub['customer'])
+
+        return Response('Success', status_code=200)
 
 @post("/checkout")
 async def checkout(request: Request) -> Response:
@@ -120,8 +146,10 @@ async def checkout(request: Request) -> Response:
     if None in (user_id, guild_id, price):
         log.debug('Request missing required parameter')
         return Response({'error': 'Missing user_id'}, status_code=400)
+    if price not in config.stripe_prices.values():
+        return Response({'error': 'Invalid price'}, status_code=400)
 
-    session_id = petname.generate(2, "-")
+    session_id = secrets.token_urlsafe(16)
     assert isinstance(session_id, str)
     log.debug('Creating checkout session for user ID %s with session ID %s', user_id, session_id)
     try:
