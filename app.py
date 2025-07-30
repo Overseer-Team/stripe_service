@@ -131,8 +131,7 @@ async def webhook(request: Request) -> Response:
                             'DELETE FROM patrons WHERE customer_id=$1 RETURNING user_id', sub['customer']
                         )
                         log.info(f'{Fore.RED}Subscription for user %s expired{Fore.RESET}', user_id)
-                    tier = rev_prices.get(price_id)
-                    if tier:
+                    elif (tier := rev_prices.get(price_id)):
                         log.info(f'{Fore.GREEN}Payment complete for customer {sub['customer']}{Fore.RESET}')
                         await conn.execute('UPDATE patrons SET tier=$1 WHERE customer_id=$2', tier, sub['customer'])
 
