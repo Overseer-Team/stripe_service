@@ -2,7 +2,7 @@
 
 This repository contains the code for a simple Litestar microservice that handles patron tracking via Stripe.
 
-Mindful design choices were made to keep this **performant** and operate near **instantaneously**, see the section below for a diagram.
+Mindful design choices were made to keep this **performant** and operate **near-instantaneously**, see the section below for a diagram.
 
 It contains two main endpoints:
 - `/shop/checkout` `-` Creates unique stateful payment links
