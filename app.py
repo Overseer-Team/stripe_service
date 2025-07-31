@@ -176,7 +176,7 @@ async def checkout(request: Request) -> Response:
         )
         await request.app.state.pool.execute(
             'INSERT INTO stripe_states (user_id, guild_id, state, stripe_price) VALUES ($1, $2, $3, $4)',
-            user_id, guild_id, session_id, price
+            int(user_id), int(guild_id), session_id, price
         )
         log.debug('Successfully stored state for session')
         return Response({'url': session.url})
